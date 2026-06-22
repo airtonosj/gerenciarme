@@ -2,7 +2,7 @@ import pandas as pd
 from db_manager import importar_equipamentos_master
 
 # 1. Coloque o caminho ou o nome exato do seu relatório de 3 meses aqui
-caminho_arquivo = "C:/Users/edeco/Downloads/Equipamentos Gerenciarme 17-06-2026.csv" 
+caminho_arquivo = r"C:\Users\Edeconsil\Documents\Equipamentos Gerenciarme 21-06-2026.csv"
 
 def realizar_carga_master(): 
     print("[CARGA] Lendo o arquivo...")

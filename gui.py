@@ -397,6 +397,7 @@ class RateioTab(ctk.CTkFrame):
         self.df_group = None
         self.df_compare = None
         self.df_compare_group = None
+        self.df_base = None          # planilha base/gabarito para comparação de lançamentos
         self._charts = []
         self._build()
         ThemeManager.register(self._sync_theme)
@@ -431,6 +432,15 @@ class RateioTab(ctk.CTkFrame):
         GlowButton(inner, text="📂  Carregar .xlsx",
                    command=self._load_file, color_key="accent",
                    width=140, height=36).pack(side="right", padx=(0, 15))
+
+        self.lbl_base = ctk.CTkLabel(inner, text="Base: nenhuma",
+                                     font=ctk.CTkFont("Segoe UI", 10),
+                                     text_color=ThemeManager.p("subtext"))
+        self.lbl_base.pack(side="right", padx=(0, 4))
+
+        GlowButton(inner, text="🗂️  Carregar Base",
+                   command=self._load_base_file, color_key="warn",
+                   width=140, height=36).pack(side="right", padx=(0, 6))
 
         # ── NOVOS CONTROLES DO BANCO DE DADOS ──
         self.btn_load_db = GlowButton(inner, text="🔍  Buscar",
@@ -1092,8 +1102,74 @@ class RateioTab(ctk.CTkFrame):
         self._make_table(tab, g[["CR", "Qtd Equipamentos"]].sort_values("Qtd Equipamentos", ascending=False))
 
     # ── Tab: Lançamentos ───────────────────────────────────────────────────────
+    def _load_base_file(self):
+        """Carrega a planilha base/gabarito para comparação de lançamentos."""
+        path = filedialog.askopenfilename(
+            title="Selecionar planilha BASE (gabarito de equipamentos)",
+            filetypes=[
+                ("Planilhas e CSV", "*.xlsx *.xls *.xlsm *.csv *.txt"),
+                ("Excel",           "*.xlsx *.xls *.xlsm"),
+                ("CSV / Texto",     "*.csv *.txt"),
+                ("Todos",           "*.*"),
+            ]
+        )
+        if not path:
+            return
+        try:
+            df = self._read_file(path)
+            df.columns = [c.strip() for c in df.columns]
+            if "CR" not in df.columns or "Equipamento" not in df.columns:
+                messagebox.showerror(
+                    "Colunas não encontradas",
+                    "A planilha base precisa ter as colunas 'CR' e 'Equipamento'.\n\n"
+                    f"Colunas encontradas: {', '.join(df.columns.tolist())}"
+                )
+                return
+            self.df_base = df[["CR", "Equipamento"]].drop_duplicates().reset_index(drop=True)
+            self.lbl_base.configure(
+                text=f"Base: {os.path.basename(path)} ({len(self.df_base)} equip.)",
+                text_color=ThemeManager.p("warn")
+            )
+            # Atualiza a aba de lançamentos se já tiver dados carregados
+            if self.df_raw is not None:
+                self._populate_lanc(self.df_raw)
+        except Exception as e:
+            messagebox.showerror("Erro ao carregar base", str(e))
+
     def _get_sem_lancamento(self, df):
-        """Return rows where Hrs Manu, Hrs Trab AND Hrs Disp are all zero/null."""
+        """
+        Retorna equipamentos sem lançamento.
+        - Se df_base estiver carregado: compara a base com o df atual e retorna
+          quem está na base mas NÃO aparece no df (não lançou no período).
+        - Caso contrário: retorna linhas com horas zeradas (comportamento original).
+        """
+        # ── Modo comparação com base ──
+        if self.df_base is not None and not self.df_base.empty:
+            df_cols = df.copy()
+            df_cols.columns = [c.strip() for c in df_cols.columns]
+
+            # Normaliza CR e Equipamento para comparação case-insensitive
+            base = self.df_base.copy()
+            base["_cr_norm"]    = base["CR"].astype(str).str.strip().str.upper()
+            base["_eq_norm"]    = base["Equipamento"].astype(str).str.strip().str.upper()
+
+            if "CR" in df_cols.columns and "Equipamento" in df_cols.columns:
+                lançados = df_cols.copy()
+                lançados["_cr_norm"] = lançados["CR"].astype(str).str.strip().str.upper()
+                lançados["_eq_norm"] = lançados["Equipamento"].astype(str).str.strip().str.upper()
+                chave_lançada = set(zip(lançados["_cr_norm"], lançados["_eq_norm"]))
+            else:
+                chave_lançada = set()
+
+            # Quem está na base mas não foi lançado
+            mask_faltando = ~base.apply(
+                lambda r: (r["_cr_norm"], r["_eq_norm"]) in chave_lançada, axis=1
+            )
+            result = base[mask_faltando][["CR", "Equipamento"]].copy()
+            result["Status"] = "Não Lançado"
+            return result.reset_index(drop=True)
+
+        # ── Modo original: horas zeradas ──
         check_cols = [c for c in ["Hrs Manu", "Hrs Trab", "Hrs Disp"] if c in df.columns]
         if not check_cols:
             return pd.DataFrame()
@@ -1227,7 +1303,8 @@ class RateioTab(ctk.CTkFrame):
 
         self._lanc_title = ctk.CTkLabel(
             rhdr,
-            text="Todos os equipamentos sem lançamento (D-2)",
+            text="Comparando com base: equipamentos não lançados" if self.df_base is not None
+                 else "Todos os equipamentos sem lançamento (D-2)",
             font=ctk.CTkFont("Segoe UI", 12, weight="bold"), anchor="w")
         self._lanc_title.pack(side="left")
 
@@ -1300,6 +1377,10 @@ class RateioTab(ctk.CTkFrame):
                 text_color=color)
             title = "Todos os equipamentos sem lançamento (D-2)" if cr_label == "Todos" \
                     else f"Sem lançamento  —  {cr_label}"
+            if self.df_base is not None and cr_label == "Todos":
+                title = "Comparando com base: equipamentos não lançados"
+            elif self.df_base is not None:
+                title = f"Não lançados (base vs período)  —  {cr_label}"
             self._lanc_title.configure(text=title)
             for _, row in data.iterrows():
                 self._lanc_tree.insert("", "end",
