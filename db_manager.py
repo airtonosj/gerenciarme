@@ -128,19 +128,33 @@ def importar_lancamentos_diarios(df_diario, data_referencia):
                 pct_utilizacao = VALUES(pct_utilizacao);
         """
         
-        dados = []
-        for _, row in df_diario.iterrows():
-            dados.append((
-                data_referencia,
-                str(row.get('CR', '')),
-                str(row.get('Equipamento', '')),
-                tratar_numero(row.get('Hrs Manu', 0.0)),
-                tratar_numero(row.get('Hrs Trab', 0.0)),
-                tratar_numero(row.get('Hrs Disp', 0.0)),
-                tratar_numero(row.get('$ Total Trab', 0.0)),
-                tratar_numero(row.get('$ Total Disp', 0.0)),
-                tratar_numero(row.get('% Util', 0.0))
-            ))
+        cols = {
+            'CR': '',
+            'Equipamento': '',
+            'Hrs Manu': 0.0,
+            'Hrs Trab': 0.0,
+            'Hrs Disp': 0.0,
+            '$ Total Trab': 0.0,
+            '$ Total Disp': 0.0,
+            '% Util': 0.0,
+        }
+        dados_df = df_diario.reindex(columns=cols.keys(), fill_value=None).fillna(cols)
+        dados_df['CR'] = dados_df['CR'].astype(str)
+        dados_df['Equipamento'] = dados_df['Equipamento'].astype(str)
+        for col in ['Hrs Manu', 'Hrs Trab', 'Hrs Disp', '$ Total Trab', '$ Total Disp', '% Util']:
+            dados_df[col] = dados_df[col].map(tratar_numero)
+        dados_df['data_referencia'] = data_referencia
+        dados = list(dados_df[[
+            'data_referencia',
+            'CR',
+            'Equipamento',
+            'Hrs Manu',
+            'Hrs Trab',
+            'Hrs Disp',
+            '$ Total Trab',
+            '$ Total Disp',
+            '% Util',
+        ]].itertuples(index=False, name=None))
             
         cursor.executemany(sql, dados)
         conexao.commit()

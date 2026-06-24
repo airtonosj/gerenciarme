@@ -698,9 +698,8 @@ class RateioTab(ctk.CTkFrame):
             title  = "Equipamentos por CR"
 
         elif tab_index == 5:  # Lançamentos
-            sem_lanc = self._get_sem_lancamento(self.df_raw)
-            df_exp = sem_lanc.copy()
-            title  = "Equipamentos sem Lançamento (D-2)"
+            self._export_pendencias()
+            return
 
         else:  # Resumo
             df_exp = g.copy()
@@ -814,14 +813,11 @@ class RateioTab(ctk.CTkFrame):
                     cell.number_format = fmt_float
 
         # ── Largura automática por coluna ──
+        sample_widths = df.astype(str).replace("<NA>", "").replace("nan", "").map(len).max()
         for col_idx, col_name in enumerate(df.columns, start=1):
             letter  = get_column_letter(col_idx)
             label   = COL_MAP.get(col_name, col_name)
-            # Measure max content width
-            max_len = len(label)
-            for _, row_data in df.iterrows():
-                v = str(row_data[col_name]) if pd.notna(row_data[col_name]) else ""
-                max_len = max(max_len, len(v))
+            max_len = max(len(label), int(sample_widths.get(col_name, 0) or 0))
             ws.column_dimensions[letter].width = min(max(max_len + 3, 12), 38)
 
         # ── Linha de totais / médias ──
@@ -1154,6 +1150,22 @@ class RateioTab(ctk.CTkFrame):
             base["_eq_norm"]    = base["Equipamento"].astype(str).str.strip().str.upper()
 
             if "CR" in df_cols.columns and "Equipamento" in df_cols.columns:
+                lancados = df_cols[["CR", "Equipamento"]].dropna().drop_duplicates().copy()
+                lancados["_cr_norm"] = lancados["CR"].astype(str).str.strip().str.upper()
+                lancados["_eq_norm"] = lancados["Equipamento"].astype(str).str.strip().str.upper()
+                encontrados = base.merge(
+                    lancados[["_cr_norm", "_eq_norm"]].drop_duplicates(),
+                    on=["_cr_norm", "_eq_norm"],
+                    how="left",
+                    indicator=True,
+                )
+                result = encontrados[encontrados["_merge"] == "left_only"][["CR", "Equipamento"]].copy()
+            else:
+                result = base[["CR", "Equipamento"]].copy()
+            result["Status"] = "NÃ£o LanÃ§ado"
+            return result.reset_index(drop=True)
+
+            if "CR" in df_cols.columns and "Equipamento" in df_cols.columns:
                 lançados = df_cols.copy()
                 lançados["_cr_norm"] = lançados["CR"].astype(str).str.strip().str.upper()
                 lançados["_eq_norm"] = lançados["Equipamento"].astype(str).str.strip().str.upper()
@@ -1184,6 +1196,217 @@ class RateioTab(ctk.CTkFrame):
         return result[display_cols].reset_index(drop=True)
 
     
+
+    def _export_pendencias(self):
+        """Exporta planilha formatada de pendências por obra para cobrança."""
+        import openpyxl
+        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+        from openpyxl.utils import get_column_letter
+        from datetime import date
+
+        # ── Coleta os dados ──
+        if hasattr(self, "_db_pendencias") and self._db_pendencias is not None:
+            sem_lanc = self._db_pendencias.copy()
+        elif self.df_raw is not None:
+            sem_lanc = self._get_sem_lancamento(self.df_raw)
+        else:
+            messagebox.showwarning("Sem dados", "Carregue um arquivo ou busque no banco antes de exportar.")
+            return
+
+        if sem_lanc.empty:
+            messagebox.showinfo("Nenhuma pendência", "Não há equipamentos pendentes para exportar!")
+            return
+
+        # ── Escolhe onde salvar ──
+        hoje = date.today().strftime("%d-%m-%Y")
+        path = filedialog.asksaveasfilename(
+            title="Salvar relatório de pendências",
+            defaultextension=".xlsx",
+            initialfile=f"Pendencias_Lancamento_{hoje}.xlsx",
+            filetypes=[("Excel", "*.xlsx")]
+        )
+        if not path:
+            return
+
+        try:
+            # ── Garante colunas mínimas ──
+            if "CR" not in sem_lanc.columns:
+                messagebox.showerror("Erro", "Os dados não possuem a coluna 'CR'.")
+                return
+            if "Equipamento" not in sem_lanc.columns:
+                sem_lanc["Equipamento"] = "—"
+            if "Status" not in sem_lanc.columns:
+                sem_lanc["Status"] = "Pendente"
+
+            # ── Agrupa por CR para gerar uma aba por obra ──
+            wb = openpyxl.Workbook()
+            wb.remove(wb.active)  # remove aba padrão vazia
+
+            # Paleta
+            C_TITLE_BG  = "C0392B"   # vermelho escuro – urgência
+            C_TITLE_FG  = "FFFFFF"
+            C_HEAD_BG   = "2C3E50"   # cinza azulado
+            C_HEAD_FG   = "FFFFFF"
+            C_ALT       = "FDECEA"   # vermelho bem claro para linhas pares
+            C_BORDER    = "E0C0BE"
+            C_TOTAL_BG  = "922B21"
+            C_TOTAL_FG  = "FFFFFF"
+
+            thin   = Side(style="thin",   color=C_BORDER)
+            medium = Side(style="medium", color="922B21")
+            border = Border(left=thin, right=thin, top=thin, bottom=thin)
+            border_top = Border(left=thin, right=thin, top=medium, bottom=medium)
+
+            alt_fill   = PatternFill("solid", fgColor=C_ALT)
+            head_fill  = PatternFill("solid", fgColor=C_HEAD_BG)
+            title_fill = PatternFill("solid", fgColor=C_TITLE_BG)
+            total_fill = PatternFill("solid", fgColor=C_TOTAL_BG)
+
+            grupos = sem_lanc.groupby("CR")
+            crs_ordenados = sorted(grupos.groups.keys())
+
+            # ── Aba resumo geral ──
+            ws_res = wb.create_sheet("📋 Resumo Geral", 0)
+            ws_res.sheet_view.showGridLines = False
+
+            resumo_titulo = f"Relatório de Pendências de Lançamento — {hoje}"
+            ws_res.merge_cells("A1:C1")
+            tc = ws_res.cell(1, 1, resumo_titulo)
+            tc.font      = Font("Segoe UI", bold=True, size=14, color=C_TITLE_FG)
+            tc.fill      = title_fill
+            tc.alignment = Alignment(horizontal="center", vertical="center")
+            ws_res.row_dimensions[1].height = 32
+
+            for col, label in enumerate(["Obra (CR)", "Equipamentos Pendentes", "Status"], 1):
+                c = ws_res.cell(2, col, label)
+                c.font      = Font("Segoe UI", bold=True, size=11, color=C_HEAD_FG)
+                c.fill      = head_fill
+                c.alignment = Alignment(horizontal="center", vertical="center")
+                c.border    = border
+            ws_res.row_dimensions[2].height = 22
+
+            total_pendencias = 0
+            for i, cr in enumerate(crs_ordenados, start=3):
+                df_cr = grupos.get_group(cr)
+                qtd   = len(df_cr)
+                total_pendencias += qtd
+                is_alt = (i % 2 == 0)
+                for col, val in enumerate([cr, qtd, "⚠️ Pendente"], 1):
+                    c = ws_res.cell(i, col, val)
+                    c.font      = Font("Segoe UI", size=10)
+                    c.alignment = Alignment(horizontal="center" if col > 1 else "left",
+                                            vertical="center")
+                    c.border    = border
+                    if is_alt:
+                        c.fill = alt_fill
+                ws_res.row_dimensions[i].height = 18
+
+            # Linha de total no resumo
+            tr = len(crs_ordenados) + 3
+            for col, val in enumerate(["TOTAL", total_pendencias, f"{len(crs_ordenados)} obras"], 1):
+                c = ws_res.cell(tr, col, val)
+                c.font      = Font("Segoe UI", bold=True, size=10, color=C_TOTAL_FG)
+                c.fill      = total_fill
+                c.alignment = Alignment(horizontal="center" if col > 1 else "left", vertical="center")
+                c.border    = border_top
+            ws_res.row_dimensions[tr].height = 20
+
+            ws_res.column_dimensions["A"].width = 42
+            ws_res.column_dimensions["B"].width = 24
+            ws_res.column_dimensions["C"].width = 16
+            ws_res.freeze_panes = "A3"
+
+            # ── Uma aba por CR ──
+            for cr in crs_ordenados:
+                df_cr = grupos.get_group(cr).reset_index(drop=True)
+
+                # Nome da aba: limita 31 chars (limite do Excel)
+                sheet_name = str(cr)[:31]
+                # Remove caracteres inválidos para nome de aba
+                for ch in r"\/?*[]:'":
+                    sheet_name = sheet_name.replace(ch, " ")
+                ws = wb.create_sheet(sheet_name)
+                ws.sheet_view.showGridLines = False
+
+                # ── Linha 1: título da obra ──
+                n_cols = max(len(df_cr.columns), 3)
+                ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=n_cols)
+                tc = ws.cell(1, 1, f"Equipamentos Pendentes — {cr}")
+                tc.font      = Font("Segoe UI", bold=True, size=13, color=C_TITLE_FG)
+                tc.fill      = title_fill
+                tc.alignment = Alignment(horizontal="left", vertical="center")
+                ws.row_dimensions[1].height = 28
+
+                # ── Linha 2: subtítulo com data e total ──
+                ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=n_cols)
+                sub = ws.cell(2, 1,
+                    f"Gerado em {hoje}  ·  {len(df_cr)} equipamento{'s' if len(df_cr) != 1 else ''} sem lançamento")
+                sub.font      = Font("Segoe UI", italic=True, size=10, color="AAAAAA")
+                sub.alignment = Alignment(horizontal="left", vertical="center")
+                sub.fill      = PatternFill("solid", fgColor="1C1C1C")
+                ws.row_dimensions[2].height = 18
+
+                # ── Linha 3: cabeçalho de colunas ──
+                col_labels = {"CR": "Obra (CR)", "Equipamento": "Equipamento",
+                               "Status": "Status", "Hrs Manu": "Hrs Manutenção",
+                               "Hrs Trab": "Hrs Trabalhadas", "Hrs Disp": "Hrs Disponíveis"}
+                for ci, col in enumerate(df_cr.columns, 1):
+                    c = ws.cell(3, ci, col_labels.get(col, col))
+                    c.font      = Font("Segoe UI", bold=True, size=11, color=C_HEAD_FG)
+                    c.fill      = head_fill
+                    c.alignment = Alignment(horizontal="center", vertical="center")
+                    c.border    = border
+                ws.row_dimensions[3].height = 22
+
+                # ── Dados ──
+                for ri, (_, row) in enumerate(df_cr.iterrows(), start=4):
+                    is_alt = (ri % 2 == 0)
+                    for ci, col in enumerate(df_cr.columns, 1):
+                        val = row[col]
+                        try:
+                            val = None if pd.isna(val) else val
+                        except Exception:
+                            pass
+                        c = ws.cell(ri, ci, val)
+                        c.font      = Font("Segoe UI", size=10)
+                        c.alignment = Alignment(
+                            horizontal="left" if col in ("CR", "Equipamento") else "center",
+                            vertical="center")
+                        c.border = border
+                        if is_alt:
+                            c.fill = alt_fill
+                    ws.row_dimensions[ri].height = 18
+
+                # ── Linha de total por aba ──
+                tr_cr = len(df_cr) + 4
+                ws.merge_cells(start_row=tr_cr, start_column=1, end_row=tr_cr, end_column=n_cols)
+                c = ws.cell(tr_cr, 1, f"Total: {len(df_cr)} equipamento{'s' if len(df_cr) != 1 else ''} pendente{'s' if len(df_cr) != 1 else ''}")
+                c.font      = Font("Segoe UI", bold=True, size=10, color=C_TOTAL_FG)
+                c.fill      = total_fill
+                c.alignment = Alignment(horizontal="left", vertical="center")
+                c.border    = border_top
+                ws.row_dimensions[tr_cr].height = 20
+
+                # ── Largura automática ──
+                for ci, col in enumerate(df_cr.columns, 1):
+                    ltr     = get_column_letter(ci)
+                    max_len = len(col_labels.get(col, col))
+                    for val in df_cr[col].astype(str):
+                        max_len = max(max_len, len(val))
+                    ws.column_dimensions[ltr].width = min(max(max_len + 3, 14), 50)
+
+                ws.freeze_panes = "A4"
+                ws.auto_filter.ref = f"A3:{get_column_letter(len(df_cr.columns))}3"
+
+            wb.save(path)
+            messagebox.showinfo(
+                "Exportado com sucesso",
+                f"Relatório salvo em:\n{path}\n\n"
+                f"📋 {len(crs_ordenados)} aba{'s' if len(crs_ordenados) != 1 else ''} de obra + 1 aba de resumo\n"
+                f"⚠️  {total_pendencias} equipamento{'s' if total_pendencias != 1 else ''} pendente{'s' if total_pendencias != 1 else ''}"
+            )
+        except Exception as e:
+            messagebox.showerror("Erro ao exportar pendências", str(e))
 
     def _populate_lanc(self, df_raw):
         tab = self.tab_lanc
@@ -1307,6 +1530,11 @@ class RateioTab(ctk.CTkFrame):
                  else "Todos os equipamentos sem lançamento (D-2)",
             font=ctk.CTkFont("Segoe UI", 12, weight="bold"), anchor="w")
         self._lanc_title.pack(side="left")
+
+        # Botão exportar pendências
+        GlowButton(rhdr, text="📤  Exportar Pendências",
+                   command=self._export_pendencias,
+                   color_key="danger", width=170, height=32).pack(side="right", padx=(8, 0))
 
         self._lanc_counter = ctk.CTkLabel(
             rhdr,
