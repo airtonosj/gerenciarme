@@ -362,16 +362,6 @@ def prepare_master(df: pd.DataFrame, historico: pd.DataFrame | None = None, refe
     return master.drop_duplicates("_eq_key", keep="first").reset_index(drop=True)
 
 
-def _is_active_status(row) -> bool:
-    manual = normalize_text(row.get("Status manual", ""))
-    cobra = normalize_text(row.get("Cobra PDE?", ""))
-    if manual in {"INATIVO", "NAO", "NAO COBRAR", "N"}:
-        return False
-    if manual in {"ATIVO", "SIM", "COBRAR", "S"}:
-        return True
-    return cobra in {"SIM", "S", "COBRAR"}
-
-
 def _active_status_mask(df: pd.DataFrame) -> pd.Series:
     manual = df.get("Status manual", pd.Series("", index=df.index)).map(normalize_text)
     cobra = df.get("Cobra PDE?", pd.Series("", index=df.index)).map(normalize_text)

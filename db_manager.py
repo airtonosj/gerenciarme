@@ -3,6 +3,13 @@ from mysql.connector import Error
 import pandas as pd
 import warnings
 import re
+import os
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
 #so pra ignorar mensagem chata de aviso
 warnings.filterwarnings('ignore', category=UserWarning)
@@ -16,6 +23,13 @@ DB_CONFIG = {
     'user': 'root',             # Seu usuário do MySQL
     'password': '260734Mn.',    # Coloque sua senha real aqui
     'database': 'gestao_equipamentos'
+}
+
+DB_CONFIG = {
+    'host': os.getenv('MYSQL_HOST', 'localhost'),
+    'user': os.getenv('MYSQL_USER', 'root'),
+    'password': os.getenv('MYSQL_PASSWORD', '260734Mn.'),
+    'database': os.getenv('MYSQL_DATABASE', 'gestao_equipamentos')
 }
 
 def conectar():

@@ -1,16 +1,27 @@
+import os
+
 import mysql.connector
 from mysql.connector import Error
 
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv()
+except ImportError:
+    pass
+
+
+DB_NAME = os.getenv("MYSQL_DATABASE", "gestao_equipamentos")
 DB_CONFIG = {
-    'host': 'localhost',
-    'user': 'root',
-    'password': '260734Mn.',  # altere se necessário
+    "host": os.getenv("MYSQL_HOST", "localhost"),
+    "user": os.getenv("MYSQL_USER", "root"),
+    "password": os.getenv("MYSQL_PASSWORD", "260734Mn."),
 }
 
 SQL_SETUP = """
-CREATE DATABASE IF NOT EXISTS gestao_equipamentos;
+CREATE DATABASE IF NOT EXISTS {db_name};
 
-USE gestao_equipamentos;
+USE {db_name};
 
 CREATE TABLE IF NOT EXISTS equipamentos_master (
     id INT AUTO_INCREMENT PRIMARY KEY,
@@ -34,24 +45,33 @@ CREATE TABLE IF NOT EXISTS lancamentos_bot_raw (
 );
 """
 
+
 def setup():
+    conexao = None
+    cursor = None
     try:
         conexao = mysql.connector.connect(**DB_CONFIG)
         cursor = conexao.cursor()
 
-        for comando in SQL_SETUP.strip().split(';'):
+        for comando in SQL_SETUP.format(db_name=DB_NAME).strip().split(";"):
             comando = comando.strip()
             if comando:
                 cursor.execute(comando)
 
         conexao.commit()
-        print("✓ Banco de dados criado com sucesso!")
+        print("Banco de dados criado com sucesso!")
+        return True
 
     except Error as e:
-        print(f"✗ Erro: {e}")
+        print(f"Erro ao conectar/configurar o MySQL: {e}")
+        print("Verifique MYSQL_USER e MYSQL_PASSWORD no arquivo .env ou no MySQL.")
+        return False
     finally:
-        cursor.close()
-        conexao.close()
+        if cursor:
+            cursor.close()
+        if conexao and conexao.is_connected():
+            conexao.close()
+
 
 if __name__ == "__main__":
     setup()
